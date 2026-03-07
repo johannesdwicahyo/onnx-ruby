@@ -1,0 +1,14 @@
+/.bundle/
+/lib/onnx_ruby/*.bundle
+/lib/onnx_ruby/*.so
+/lib/onnx_ruby/*.dll
+/pkg/
+/tmp/
+/vendor/
+*.gem
+*.o
+*.log
+Gemfile.lock
+Makefile
+mkmf.log
+/ext/onnx_ruby/onnxruntime/
