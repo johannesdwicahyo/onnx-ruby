@@ -12,3 +12,5 @@ Gemfile.lock
 Makefile
 mkmf.log
 /ext/onnx_ruby/onnxruntime/
+/examples/models/
+CLAUDE.md

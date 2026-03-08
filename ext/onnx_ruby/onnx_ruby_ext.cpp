@@ -1,11 +1,15 @@
 #include <rice/rice.hpp>
 #include <rice/stl.hpp>
 #include <onnxruntime_cxx_api.h>
+#ifdef __APPLE__
+#include <coreml_provider_factory.h>
+#endif
 #include <vector>
 #include <string>
 #include <cstring>
 #include <stdexcept>
 #include <memory>
+#include <unordered_map>
 
 using namespace Rice;
 
@@ -139,13 +143,87 @@ static Rice::Object tensor_to_ruby(const Ort::Value& tensor) {
   return current;
 }
 
+// Map Ruby optimization level symbol to ORT enum
+static GraphOptimizationLevel parse_opt_level(const std::string& level) {
+  if (level == "none" || level == "disabled") return GraphOptimizationLevel::ORT_DISABLE_ALL;
+  if (level == "basic") return GraphOptimizationLevel::ORT_ENABLE_BASIC;
+  if (level == "extended") return GraphOptimizationLevel::ORT_ENABLE_EXTENDED;
+  return GraphOptimizationLevel::ORT_ENABLE_ALL; // "all" or default
+}
+
+// Optimize a model and save to disk
+static Rice::Object optimize_model(const std::string& input_path, const std::string& output_path,
+                                   const std::string& opt_level) {
+  Ort::SessionOptions opts;
+  opts.SetGraphOptimizationLevel(parse_opt_level(opt_level));
+  opts.SetOptimizedModelFilePath(output_path.c_str());
+
+  // Creating the session triggers optimization and saves the optimized model
+  Ort::Session session(get_env(), input_path.c_str(), opts);
+  return Rice::Object(Qtrue);
+}
+
+// Get available execution providers
+static Rice::Array available_providers() {
+  Rice::Array result;
+  auto providers = Ort::GetAvailableProviders();
+  for (const auto& p : providers) {
+    result.push(Rice::String(p));
+  }
+  return result;
+}
+
 class SessionWrapper {
 public:
-  SessionWrapper(const std::string& model_path, int log_level, int intra_threads, int inter_threads) {
+  SessionWrapper(const std::string& model_path, int log_level, int intra_threads, int inter_threads,
+                 const std::string& opt_level, bool memory_pattern, bool cpu_mem_arena,
+                 const std::string& execution_mode, Rice::Array providers) {
     Ort::SessionOptions opts;
+
     if (intra_threads > 0) opts.SetIntraOpNumThreads(intra_threads);
     if (inter_threads > 0) opts.SetInterOpNumThreads(inter_threads);
-    opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+    opts.SetGraphOptimizationLevel(parse_opt_level(opt_level));
+
+    if (!memory_pattern) opts.DisableMemPattern();
+    if (!cpu_mem_arena) opts.DisableCpuMemArena();
+
+    if (execution_mode == "parallel") {
+      opts.SetExecutionMode(ExecutionMode::ORT_PARALLEL);
+    } else {
+      opts.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
+    }
+
+    // Append execution providers
+    for (long i = 0; i < RARRAY_LEN(providers.value()); i++) {
+      std::string provider = Rice::detail::From_Ruby<std::string>().convert(
+          rb_ary_entry(providers.value(), i));
+
+      if (provider == "coreml") {
+#ifdef __APPLE__
+        uint32_t coreml_flags = COREML_FLAG_USE_NONE;
+        auto status = OrtSessionOptionsAppendExecutionProvider_CoreML(opts, coreml_flags);
+        if (status) {
+          std::string msg = Ort::GetApi().GetErrorMessage(status);
+          Ort::GetApi().ReleaseStatus(status);
+          throw std::runtime_error("CoreML provider error: " + msg);
+        }
+#else
+        throw std::runtime_error("CoreML provider is only available on macOS/iOS");
+#endif
+      } else if (provider == "cuda") {
+        OrtCUDAProviderOptions cuda_opts;
+        memset(&cuda_opts, 0, sizeof(cuda_opts));
+        opts.AppendExecutionProvider_CUDA(cuda_opts);
+      } else if (provider == "tensorrt") {
+        OrtTensorRTProviderOptions trt_opts;
+        memset(&trt_opts, 0, sizeof(trt_opts));
+        opts.AppendExecutionProvider_TensorRT(trt_opts);
+      } else if (provider == "cpu") {
+        // CPU is always available as fallback, no-op
+      } else {
+        throw std::runtime_error("Unknown execution provider: " + provider);
+      }
+    }
 
     session_ = std::make_unique<Ort::Session>(get_env(log_level), model_path.c_str(), opts);
     allocator_ = Ort::AllocatorWithDefaultOptions();
@@ -173,7 +251,7 @@ public:
       }
       info[Rice::Symbol("shape")] = rb_shape;
 
-      result.push(info);
+      result.push(Rice::Object(info.value()));
     }
     return result;
   }
@@ -200,13 +278,13 @@ public:
       }
       info[Rice::Symbol("shape")] = rb_shape;
 
-      result.push(info);
+      result.push(Rice::Object(info.value()));
     }
     return result;
   }
 
   // Run inference
-  Rice::Hash run(Rice::Array input_specs, Rice::Array output_names_filter) {
+  Rice::Object run(Rice::Array input_specs, Rice::Array output_names_filter) {
     std::vector<const char*> input_names;
     std::vector<Ort::Value> input_tensors;
     std::vector<std::string> input_name_strs;
@@ -216,7 +294,8 @@ public:
     std::vector<std::vector<double>> double_buffers;
     std::vector<std::vector<int32_t>> int32_buffers;
     std::vector<std::vector<int64_t>> int64_buffers;
-    std::vector<std::vector<bool>> bool_buffers;
+    // Use uint8_t instead of bool because std::vector<bool> is bit-packed and has no .data()
+    std::vector<std::vector<uint8_t>> bool_buffers;
 
     auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
 
@@ -280,11 +359,11 @@ public:
         bool_buffers.emplace_back(total_elements);
         auto& buf = bool_buffers.back();
         for (size_t i = 0; i < total_elements; i++) {
-          buf[i] = RTEST(rb_ary_entry(data.value(), i));
+          buf[i] = RTEST(rb_ary_entry(data.value(), i)) ? 1 : 0;
         }
         input_tensors.push_back(
-          Ort::Value::CreateTensor<bool>(memory_info, buf.data(), total_elements,
-                                         shape.data(), shape.size()));
+          Ort::Value::CreateTensor(memory_info, reinterpret_cast<bool*>(buf.data()), total_elements,
+                                   shape.data(), shape.size(), ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL));
       } else {
         throw std::runtime_error("Unsupported input dtype: " + dtype);
       }
@@ -342,9 +421,16 @@ extern "C" void Init_onnx_ruby_ext() {
   Module rb_mExt = define_module_under(rb_mOnnxRuby, "Ext");
 
   define_class_under<SessionWrapper>(rb_mExt, "SessionWrapper")
-    .define_constructor(Constructor<SessionWrapper, const std::string&, int, int, int>(),
-                        Arg("model_path"), Arg("log_level"), Arg("intra_threads"), Arg("inter_threads"))
+    .define_constructor(Constructor<SessionWrapper, const std::string&, int, int, int,
+                        const std::string&, bool, bool, const std::string&, Rice::Array>(),
+                        Arg("model_path"), Arg("log_level"), Arg("intra_threads"), Arg("inter_threads"),
+                        Arg("opt_level"), Arg("memory_pattern"), Arg("cpu_mem_arena"),
+                        Arg("execution_mode"), Arg("providers"))
     .define_method("input_info", &SessionWrapper::input_info)
     .define_method("output_info", &SessionWrapper::output_info)
     .define_method("run", &SessionWrapper::run);
+
+  rb_mExt.define_module_function("optimize_model", &optimize_model,
+                                  Arg("input_path"), Arg("output_path"), Arg("opt_level"));
+  rb_mExt.define_module_function("available_providers", &available_providers);
 }

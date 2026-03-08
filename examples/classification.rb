@@ -3,19 +3,33 @@
 
 # Example: Run an ONNX classification model
 #
-# Prerequisites:
-#   - Export a classification model to ONNX format
-#   - gem install onnx-ruby
+# With tokenizer (text input):
+#   gem install onnx-ruby tokenizers
+#   ruby classification.rb intent_model.onnx bert-base-uncased
+#
+# With raw features:
+#   ruby classification.rb classifier.onnx
 
 require "onnx_ruby"
 
 model_path = ARGV[0] || "classifier.onnx"
-abort "Usage: ruby classification.rb <model.onnx>" unless File.exist?(model_path)
+tokenizer_name = ARGV[1]
+abort "Usage: ruby classification.rb <model.onnx> [tokenizer_name]" unless File.exist?(model_path)
 
-session = OnnxRuby::Session.new(model_path)
+labels = %w[greeting farewell question command]
 
-puts "Model inputs:"
-session.inputs.each { |i| puts "  #{i[:name]}: #{i[:type]} #{i[:shape]}" }
+if tokenizer_name
+  classifier = OnnxRuby::Classifier.new(model_path,
+                                        tokenizer: tokenizer_name,
+                                        labels: labels)
+  result = classifier.predict("Hello there!")
+  puts "Prediction: #{result[:label]} (score: #{result[:score].round(4)})"
+else
+  classifier = OnnxRuby::Classifier.new(model_path, labels: labels)
 
-puts "\nModel outputs:"
-session.outputs.each { |o| puts "  #{o[:name]}: #{o[:type]} #{o[:shape]}" }
+  # Use raw feature vector
+  features = Array.new(8) { rand(-1.0..1.0) }
+  result = classifier.predict(features)
+  puts "Prediction: #{result[:label]} (score: #{result[:score].round(4)})"
+  puts "All scores: #{result[:scores].map { |s| s.round(4) }}"
+end

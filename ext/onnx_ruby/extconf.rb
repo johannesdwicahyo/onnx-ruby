@@ -1,7 +1,6 @@
 require "mkmf-rice"
 require "fileutils"
-require "open-uri"
-require "rubygems/package"
+require "tmpdir"
 
 ORT_VERSION = "1.24.3"
 

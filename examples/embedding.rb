@@ -3,29 +3,33 @@
 
 # Example: Run an ONNX embedding model
 #
-# Prerequisites:
-#   - Export an embedding model to ONNX format (e.g., all-MiniLM-L6-v2)
-#   - gem install onnx-ruby
+# With tokenizer (text input):
+#   gem install onnx-ruby tokenizers
+#   ruby embedding.rb all-MiniLM-L6-v2.onnx sentence-transformers/all-MiniLM-L6-v2
+#
+# With raw token IDs:
+#   ruby embedding.rb all-MiniLM-L6-v2.onnx
 
 require "onnx_ruby"
 
 model_path = ARGV[0] || "all-MiniLM-L6-v2.onnx"
-abort "Usage: ruby embedding.rb <model.onnx>" unless File.exist?(model_path)
+tokenizer_name = ARGV[1]
+abort "Usage: ruby embedding.rb <model.onnx> [tokenizer_name]" unless File.exist?(model_path)
 
-session = OnnxRuby::Session.new(model_path)
+if tokenizer_name
+  embedder = OnnxRuby::Embedder.new(model_path, tokenizer: tokenizer_name)
+  embedding = embedder.embed("Hello world")
+  puts "Embedding (#{embedding.length} dims): #{embedding.take(5).map { |v| v.round(4) }}..."
 
-puts "Model inputs:"
-session.inputs.each { |i| puts "  #{i[:name]}: #{i[:type]} #{i[:shape]}" }
+  batch = embedder.embed_batch(["Hello", "World", "Ruby is great"])
+  puts "Batch: #{batch.length} embeddings of #{batch.first.length} dims"
+else
+  embedder = OnnxRuby::Embedder.new(model_path)
 
-puts "\nModel outputs:"
-session.outputs.each { |o| puts "  #{o[:name]}: #{o[:type]} #{o[:shape]}" }
-
-# Example: run with token IDs (you'd normally get these from a tokenizer)
-# input_ids = [[101, 2023, 2003, 1037, 3231, 102]]
-# attention_mask = [[1, 1, 1, 1, 1, 1]]
-#
-# result = session.run({
-#   "input_ids" => input_ids,
-#   "attention_mask" => attention_mask
-# })
-# puts result["embeddings"][0].take(5)
+  # Use pre-tokenized input
+  result = embedder.embed({
+    "input_ids" => [101, 2023, 2003, 1037, 3231, 102],
+    "attention_mask" => [1, 1, 1, 1, 1, 1]
+  })
+  puts "Embedding (#{result.length} dims): #{result.take(5).map { |v| v.round(4) }}..."
+end

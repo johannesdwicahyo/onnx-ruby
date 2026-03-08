@@ -2,14 +2,31 @@
 
 module OnnxRuby
   class Session
+    VALID_PROVIDERS = %i[cpu coreml cuda tensorrt].freeze
+
     def initialize(model_path, providers: [:cpu], inter_threads: nil, intra_threads: nil,
-                   log_level: :warning)
+                   log_level: :warning, optimization_level: :all, memory_pattern: true,
+                   cpu_mem_arena: true, execution_mode: :sequential)
       model_path = File.expand_path(model_path)
       raise ModelError, "model file not found: #{model_path}" unless File.exist?(model_path)
 
-      log_level_int = log_level_to_int(log_level)
-      @session = Ext::SessionWrapper.new(model_path, log_level_int,
-                                         intra_threads || 0, inter_threads || 0)
+      provider_strs = Array(providers).map do |p|
+        p = p.to_sym
+        raise Error, "unknown provider: #{p}. Valid: #{VALID_PROVIDERS.join(", ")}" unless VALID_PROVIDERS.include?(p)
+        p.to_s
+      end
+
+      @session = Ext::SessionWrapper.new(
+        model_path,
+        log_level_to_int(log_level),
+        intra_threads || 0,
+        inter_threads || 0,
+        optimization_level.to_s,
+        memory_pattern,
+        cpu_mem_arena,
+        execution_mode.to_s,
+        provider_strs
+      )
     end
 
     def inputs
@@ -21,7 +38,6 @@ module OnnxRuby
     end
 
     def run(inputs, output_names: nil)
-      input_names = inputs.keys
       input_values = inputs.map do |name, data|
         if data.is_a?(Tensor)
           { name: name, data: data.flat_data, shape: data.shape, dtype: data.dtype.to_s }
