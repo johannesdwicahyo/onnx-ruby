@@ -12,6 +12,7 @@ end
 require_relative "onnx_ruby/onnx_ruby_ext"
 require_relative "onnx_ruby/tensor"
 require_relative "onnx_ruby/session"
+require_relative "onnx_ruby/tokenizer_support"
 require_relative "onnx_ruby/embedder"
 require_relative "onnx_ruby/classifier"
 require_relative "onnx_ruby/reranker"

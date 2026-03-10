@@ -28,8 +28,6 @@ module OnnxRuby
     private
 
     def load_session
-      return @session if @session
-
       @mutex.synchronize do
         @session ||= Session.new(@model_path, **@opts)
       end

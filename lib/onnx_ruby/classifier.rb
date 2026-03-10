@@ -2,6 +2,8 @@
 
 module OnnxRuby
   class Classifier
+    include TokenizerSupport
+
     attr_reader :session, :labels
 
     def initialize(model_path, tokenizer: nil, labels: nil, **session_opts)
@@ -31,23 +33,9 @@ module OnnxRuby
 
     private
 
-    def resolve_tokenizer(tokenizer)
-      return nil if tokenizer.nil?
-
-      if tokenizer.respond_to?(:encode)
-        tokenizer
-      else
-        begin
-          require "tokenizers"
-          Tokenizers::Tokenizer.from_pretrained(tokenizer.to_s)
-        rescue LoadError
-          raise Error, "tokenizer-ruby gem is required for text tokenization. " \
-                       "Install with: gem install tokenizers"
-        end
-      end
-    end
-
     def prepare_inputs(inputs)
+      return [] if inputs.empty?
+
       if inputs.first.is_a?(String)
         raise Error, "tokenizer is required for text inputs" unless @tokenizer
 

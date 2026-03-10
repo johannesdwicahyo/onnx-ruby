@@ -2,6 +2,8 @@
 
 module OnnxRuby
   class Reranker
+    include TokenizerSupport
+
     attr_reader :session
 
     def initialize(model_path, tokenizer: nil, **session_opts)
@@ -36,22 +38,6 @@ module OnnxRuby
     end
 
     private
-
-    def resolve_tokenizer(tokenizer)
-      return nil if tokenizer.nil?
-
-      if tokenizer.respond_to?(:encode)
-        tokenizer
-      else
-        begin
-          require "tokenizers"
-          Tokenizers::Tokenizer.from_pretrained(tokenizer.to_s)
-        rescue LoadError
-          raise Error, "tokenizer-ruby gem is required for text tokenization. " \
-                       "Install with: gem install tokenizers"
-        end
-      end
-    end
 
     def score_pairs(pairs)
       if @tokenizer.respond_to?(:encode_batch)

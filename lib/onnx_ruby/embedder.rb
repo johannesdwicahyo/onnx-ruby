@@ -2,6 +2,8 @@
 
 module OnnxRuby
   class Embedder
+    include TokenizerSupport
+
     attr_reader :session
 
     def initialize(model_path, tokenizer: nil, normalize: true, **session_opts)
@@ -26,6 +28,7 @@ module OnnxRuby
       result = @session.run(feed)
 
       raw = find_output(result, %w[embeddings sentence_embedding output last_hidden_state])
+      return [] if raw.nil? || raw.empty?
 
       # If output is 3D (batch, seq_len, dim) — do mean pooling
       embeddings = if raw.first.is_a?(Array) && raw.first.first.is_a?(Array)
@@ -38,22 +41,6 @@ module OnnxRuby
     end
 
     private
-
-    def resolve_tokenizer(tokenizer)
-      return nil if tokenizer.nil?
-
-      if tokenizer.respond_to?(:encode) || tokenizer.respond_to?(:encode_batch)
-        tokenizer
-      else
-        begin
-          require "tokenizers"
-          Tokenizers::Tokenizer.from_pretrained(tokenizer.to_s)
-        rescue LoadError
-          raise Error, "tokenizer-ruby gem is required for text tokenization. " \
-                       "Install with: gem install tokenizers"
-        end
-      end
-    end
 
     def prepare_inputs(inputs)
       if inputs.first.is_a?(String)
@@ -100,6 +87,8 @@ module OnnxRuby
 
     def build_feed(ids, masks)
       input_names = @session.inputs.map { |i| i[:name] }
+      raise OnnxRuby::Error, "Model has no input names" if input_names.empty?
+
       feed = {}
       feed[input_names.find { |n| n.include?("input_id") } || input_names[0]] = ids
       mask_name = input_names.find { |n| n.include?("mask") || n.include?("attention") }
@@ -119,6 +108,8 @@ module OnnxRuby
     # Mean pooling over token embeddings, masked by attention_mask
     def mean_pool(hidden_states, masks)
       hidden_states.each_with_index.map do |tokens, batch_idx|
+        return [] if tokens.nil? || tokens.empty? || tokens.first.nil?
+
         mask = masks && masks[batch_idx]
         dim = tokens.first.length
         sum = Array.new(dim, 0.0)
