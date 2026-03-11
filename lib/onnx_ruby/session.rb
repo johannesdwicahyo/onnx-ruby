@@ -42,8 +42,13 @@ module OnnxRuby
         if data.is_a?(Tensor)
           { name: name, data: data.flat_data, shape: data.shape, dtype: data.dtype.to_s }
         else
-          flat = data.flatten
           shape = infer_shape(data)
+          flat = data.flatten
+          expected_size = shape.reduce(1, :*)
+          if flat.length != expected_size
+            raise TensorError,
+                  "input '#{name}' data size #{flat.length} does not match shape #{shape} (expected #{expected_size})"
+          end
           dtype = infer_dtype(flat)
           { name: name, data: flat, shape: shape, dtype: dtype }
         end
@@ -70,6 +75,13 @@ module OnnxRuby
       current = data
       while current.is_a?(Array)
         shape << current.length
+        if current.length > 1 && current.all? { |el| el.is_a?(Array) }
+          lengths = current.map(&:length).uniq
+          if lengths.size > 1
+            raise TensorError,
+                  "jagged array detected: sub-arrays have lengths #{lengths.sort.join(', ')} at dimension #{shape.size - 1}"
+          end
+        end
         current = current.first
       end
       shape

@@ -59,6 +59,14 @@ module OnnxRuby
       current = data
       while current.is_a?(Array)
         shape << current.length
+        # Check for jagged arrays: all sub-arrays at this level must have the same length
+        if current.length > 1 && current.all? { |el| el.is_a?(Array) }
+          lengths = current.map(&:length).uniq
+          if lengths.size > 1
+            raise TensorError,
+                  "jagged array detected: sub-arrays have lengths #{lengths.sort.join(', ')} at dimension #{shape.size - 1}"
+          end
+        end
         current = current.first
       end
       shape

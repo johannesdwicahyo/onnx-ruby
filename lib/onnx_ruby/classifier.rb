@@ -86,9 +86,15 @@ module OnnxRuby
     end
 
     def softmax(logits)
+      # Clamp extreme values to prevent overflow
       max_val = logits.max
-      exps = logits.map { |v| Math.exp(v - max_val) }
+      exps = logits.map do |v|
+        clamped = v - max_val
+        clamped = -500.0 if clamped < -500.0
+        Math.exp(clamped)
+      end
       sum = exps.sum
+      sum = Float::MIN if sum.zero?
       exps.map { |v| v / sum }
     end
   end

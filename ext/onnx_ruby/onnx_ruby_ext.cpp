@@ -94,9 +94,60 @@ static Rice::Object tensor_to_ruby(const Ort::Value& tensor) {
       break;
     }
     case ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL: {
-      const bool* data = tensor.GetTensorData<bool>();
+      const uint8_t* data = reinterpret_cast<const uint8_t*>(tensor.GetTensorData<bool>());
       for (size_t i = 0; i < total; i++) {
         flat.push(Rice::Object(data[i] ? Qtrue : Qfalse));
+      }
+      break;
+    }
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8: {
+      const uint8_t* data = tensor.GetTensorData<uint8_t>();
+      for (size_t i = 0; i < total; i++) {
+        flat.push(Rice::Object(INT2NUM(data[i])));
+      }
+      break;
+    }
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8: {
+      const int8_t* data = tensor.GetTensorData<int8_t>();
+      for (size_t i = 0; i < total; i++) {
+        flat.push(Rice::Object(INT2NUM(data[i])));
+      }
+      break;
+    }
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT16: {
+      const uint16_t* data = tensor.GetTensorData<uint16_t>();
+      for (size_t i = 0; i < total; i++) {
+        flat.push(Rice::Object(INT2NUM(data[i])));
+      }
+      break;
+    }
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16: {
+      const int16_t* data = tensor.GetTensorData<int16_t>();
+      for (size_t i = 0; i < total; i++) {
+        flat.push(Rice::Object(INT2NUM(data[i])));
+      }
+      break;
+    }
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16: {
+      // float16 is stored as uint16_t; convert to float for Ruby
+      const uint16_t* data = tensor.GetTensorData<uint16_t>();
+      for (size_t i = 0; i < total; i++) {
+        // IEEE 754 half-precision to single-precision conversion
+        uint16_t h = data[i];
+        uint32_t sign = (h & 0x8000u) << 16;
+        uint32_t exponent = (h >> 10) & 0x1F;
+        uint32_t mantissa = h & 0x03FF;
+        uint32_t f;
+        if (exponent == 0) {
+          f = sign; // zero or subnormal (treat as zero for simplicity)
+        } else if (exponent == 31) {
+          f = sign | 0x7F800000u | (mantissa << 13); // inf or nan
+        } else {
+          f = sign | ((exponent + 112) << 23) | (mantissa << 13);
+        }
+        float val;
+        memcpy(&val, &f, sizeof(float));
+        flat.push(Rice::Object(rb_float_new(static_cast<double>(val))));
       }
       break;
     }
@@ -317,7 +368,13 @@ public:
       }
 
       size_t total_elements = 1;
-      for (auto dim : shape) total_elements *= dim;
+      for (auto dim : shape) {
+        if (dim < 0) throw std::runtime_error("Negative shape dimension: " + std::to_string(dim));
+        if (dim > 0 && total_elements > SIZE_MAX / static_cast<size_t>(dim)) {
+          throw std::runtime_error("Shape dimension overflow");
+        }
+        total_elements *= static_cast<size_t>(dim);
+      }
 
       if (dtype == "float") {
         float_buffers.emplace_back(total_elements);

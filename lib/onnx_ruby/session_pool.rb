@@ -64,12 +64,15 @@ module OnnxRuby
     def checkin(session)
       @mutex.synchronize do
         @pool.push(session)
-        @condition.signal
+        @condition.broadcast
       end
     end
 
     def create_session
       Session.new(@model_path, **@session_opts)
+    rescue => e
+      @created -= 1
+      raise
     end
   end
 end
